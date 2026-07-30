@@ -1,6 +1,6 @@
-# Tibo Reset Radar Scheduler
+# Codex Reset Radar Scheduler
 
-每 15 分钟调用一次 Tibo Reset Radar。只有站点返回新的额度重置信号时，才写入飞书多维表格；表格内已启用的工作流负责生成中文翻译并发送飞书私聊。
+每 15 分钟调用一次 Codex Reset Radar。站点同时监控 Tibo、OpenAI、OpenAI Developers 和两位 Codex 团队成员。只有返回新的额度重置信号时，才把来源、可信度、判定依据和原文写入飞书多维表格；表格内已启用的工作流负责生成中文翻译并发送飞书私聊。
 
 ## 安全边界
 
