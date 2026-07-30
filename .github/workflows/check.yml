@@ -1,0 +1,35 @@
+name: Check Tibo reset signals
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tibo-reset-radar
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MONITOR_URL: https://tibo-reset-radar-anvsk.anvskyi.chatgpt.site/api/check
+      MONITOR_KEY: ${{ secrets.MONITOR_KEY }}
+      FEISHU_APP_ID: cli_aaad5f72d7f95cb3
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_BASE_TOKEN: KtOObesrpatdCwspUGnc0Lhyn55
+      FEISHU_TABLE_ID: tblZczmgME2pOtum
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check and deliver new reset signals
+        run: node .github/scripts/check.mjs
