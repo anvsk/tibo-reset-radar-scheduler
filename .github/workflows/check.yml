@@ -1,4 +1,4 @@
-name: Check Tibo reset signals
+name: Check Codex reset signals
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tibo-reset-radar
+  group: codex-reset-radar
   cancel-in-progress: false
 
 jobs:

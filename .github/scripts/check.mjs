@@ -85,7 +85,12 @@ async function createBaseRecord(token, signal) {
   const publishedAt = Date.parse(signal.publishedAt);
   const fields = {
     帖子ID: signal.tweetId,
+    来源账号: signal.sourceAccount ?? "@thsottiaux",
+    来源名称: signal.sourceName ?? "Tibo",
+    来源角色: signal.sourceRoleLabel ?? "产品负责人",
+    可信度: signal.confidence ?? "产品负责人确认",
     分类: signal.category,
+    判定依据: signal.classificationReason,
     原文: signal.originalText,
     原帖链接: {
       text: "查看 X 原帖",
@@ -153,4 +158,7 @@ if (!signal.matched) {
 const token = await getTenantToken();
 const recordId = await createBaseRecord(token, signal);
 await acknowledgeSignal(signal);
-console.log(`Delivered tweet ${signal.tweetId} to Base record ${recordId}.`);
+console.log(
+  `Delivered ${signal.sourceAccount ?? "@thsottiaux"} tweet ` +
+    `${signal.tweetId} to Base record ${recordId}.`,
+);
