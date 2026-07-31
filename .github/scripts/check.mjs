@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
+
 const requiredEnvironment = [
   "MONITOR_URL",
   "MONITOR_KEY",
   "FEISHU_APP_ID",
   "FEISHU_APP_SECRET",
-  "FEISHU_BASE_TOKEN",
-  "FEISHU_TABLE_ID",
+  "FEISHU_RECIPIENTS_JSON",
 ];
 
 const missing = requiredEnvironment.filter((name) => !process.env[name]);
@@ -18,9 +19,45 @@ const {
   MONITOR_KEY,
   FEISHU_APP_ID,
   FEISHU_APP_SECRET,
-  FEISHU_BASE_TOKEN,
-  FEISHU_TABLE_ID,
+  FEISHU_RECIPIENTS_JSON,
 } = process.env;
+
+function readRecipients() {
+  let recipients;
+  try {
+    recipients = JSON.parse(FEISHU_RECIPIENTS_JSON);
+  } catch {
+    throw new Error("FEISHU_RECIPIENTS_JSON must contain valid JSON.");
+  }
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    throw new Error("FEISHU_RECIPIENTS_JSON must contain a non-empty array.");
+  }
+
+  const keys = new Set();
+  for (const recipient of recipients) {
+    if (
+      !recipient ||
+      typeof recipient !== "object" ||
+      typeof recipient.key !== "string" ||
+      !/^[a-z0-9_-]{1,64}$/.test(recipient.key) ||
+      typeof recipient.name !== "string" ||
+      recipient.name.trim().length === 0 ||
+      typeof recipient.openId !== "string" ||
+      !/^ou_[a-zA-Z0-9]+$/.test(recipient.openId)
+    ) {
+      throw new Error(
+        "Every Feishu recipient needs a valid key, name and openId.",
+      );
+    }
+    if (keys.has(recipient.key)) {
+      throw new Error(`Duplicate Feishu recipient key: ${recipient.key}`);
+    }
+    keys.add(recipient.key);
+  }
+
+  return recipients;
+}
 
 async function readJson(response, label) {
   const text = await response.text();
@@ -69,44 +106,109 @@ async function checkForSignal() {
       method: "POST",
       headers: { "x-monitor-key": MONITOR_KEY },
     }),
-    "Tibo monitor",
+    "Codex reset monitor",
   );
 
   if (!result.response.ok || !result.payload.ok) {
     throw new Error(
-      `Tibo monitor failed: ${result.payload.message ?? result.response.status}`,
+      `Codex reset monitor failed: ${result.payload.message ?? result.response.status}`,
     );
   }
 
   return result.payload;
 }
 
-async function createBaseRecord(token, signal) {
-  const publishedAt = Date.parse(signal.publishedAt);
-  const fields = {
-    帖子ID: signal.tweetId,
-    来源账号: signal.sourceAccount ?? "@thsottiaux",
-    来源名称: signal.sourceName ?? "Tibo",
-    来源角色: signal.sourceRoleLabel ?? "产品负责人",
-    可信度: signal.confidence ?? "产品负责人确认",
-    分类: signal.category,
-    判定依据: signal.classificationReason,
-    原文: signal.originalText,
-    原帖链接: {
-      text: "查看 X 原帖",
-      link: signal.postUrl,
-    },
-    推送状态: "待推送",
-    检测时间: Date.now(),
-  };
+function formatPublishedAt(value) {
+  const publishedAt = new Date(value);
+  if (Number.isNaN(publishedAt.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(publishedAt);
+}
 
-  if (Number.isFinite(publishedAt)) {
-    fields.发布时间 = publishedAt;
+function safePostUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
   }
+}
 
-  const endpoint =
-    `https://open.feishu.cn/open-apis/bitable/v1/apps/${FEISHU_BASE_TOKEN}` +
-    `/tables/${FEISHU_TABLE_ID}/records`;
+function messageContent(signal) {
+  const translation =
+    typeof signal.translationZh === "string" && signal.translationZh.trim()
+      ? signal.translationZh.trim()
+      : "中文翻译暂不可用，请结合原文和判定依据查看。";
+  const postUrl = safePostUrl(signal.postUrl);
+  const content = [
+    [
+      {
+        tag: "text",
+        text:
+          `来源：${signal.sourceName}（${signal.sourceAccount}）\n` +
+          `类别：${signal.category}\n` +
+          `可信度：${signal.confidence}\n` +
+          `发布时间：${formatPublishedAt(signal.publishedAt)}（北京时间）`,
+      },
+    ],
+    [
+      {
+        tag: "text",
+        text: `\n中文翻译\n${translation}`,
+      },
+    ],
+    [
+      {
+        tag: "text",
+        text: `\n判定依据\n${signal.classificationReason}`,
+      },
+    ],
+    [
+      {
+        tag: "text",
+        text: `\n原文\n${signal.originalText}`,
+      },
+    ],
+  ];
+  if (postUrl) {
+    content.push([
+      {
+        tag: "a",
+        text: "查看原帖",
+        href: postUrl,
+      },
+    ]);
+  }
+  return JSON.stringify({
+    zh_cn: {
+      title: "Codex 额度重置监控",
+      content,
+    },
+  });
+}
+
+function idempotencyKey(signal, recipient) {
+  const digest = createHash("sha256")
+    .update(`${signal.tweetId}:${recipient.key}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `codex-reset-${digest}`;
+}
+
+async function sendFeishuMessage(token, signal, recipient) {
+  const endpoint = new URL(
+    "https://open.feishu.cn/open-apis/im/v1/messages",
+  );
+  endpoint.searchParams.set("receive_id_type", "open_id");
   const result = await readJson(
     await fetch(endpoint, {
       method: "POST",
@@ -114,21 +216,57 @@ async function createBaseRecord(token, signal) {
         authorization: `Bearer ${token}`,
         "content-type": "application/json; charset=utf-8",
       },
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify({
+        receive_id: recipient.openId,
+        msg_type: "post",
+        content: messageContent(signal),
+        uuid: idempotencyKey(signal, recipient),
+      }),
     }),
-    "Feishu Base",
+    `Feishu message for ${recipient.name}`,
   );
 
-  if (!result.response.ok || result.payload.code !== 0) {
+  if (
+    !result.response.ok ||
+    result.payload.code !== 0 ||
+    !result.payload.data?.message_id
+  ) {
     throw new Error(
-      `Feishu Base write failed: ${result.payload.msg ?? result.response.status}`,
+      `Feishu message for ${recipient.name} failed: ` +
+        `${result.payload.msg ?? result.response.status}`,
     );
   }
 
-  return result.payload.data?.record?.record_id ?? "unknown";
+  return result.payload.data.message_id;
 }
 
-async function acknowledgeSignal(signal) {
+async function recordDelivery(signal, recipient, messageId) {
+  const deliveryUrl = new URL("/api/delivery", MONITOR_URL);
+  const result = await readJson(
+    await fetch(deliveryUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-monitor-key": MONITOR_KEY,
+      },
+      body: JSON.stringify({
+        tweetId: signal.tweetId,
+        recipientKey: recipient.key,
+        recipientName: recipient.name,
+        messageId,
+      }),
+    }),
+    "Codex reset monitor delivery receipt",
+  );
+
+  if (!result.response.ok || !result.payload.ok) {
+    throw new Error(
+      `Delivery receipt failed: ${result.payload.message ?? result.response.status}`,
+    );
+  }
+}
+
+async function acknowledgeSignal(signal, recipientKeys) {
   const ackUrl = new URL("/api/ack", MONITOR_URL);
   const result = await readJson(
     await fetch(ackUrl, {
@@ -137,9 +275,12 @@ async function acknowledgeSignal(signal) {
         "content-type": "application/json",
         "x-monitor-key": MONITOR_KEY,
       },
-      body: JSON.stringify({ tweetId: signal.tweetId }),
+      body: JSON.stringify({
+        tweetId: signal.tweetId,
+        recipientKeys,
+      }),
     }),
-    "Tibo monitor acknowledgement",
+    "Codex reset monitor acknowledgement",
   );
 
   if (!result.response.ok || !result.payload.ok) {
@@ -149,16 +290,30 @@ async function acknowledgeSignal(signal) {
   }
 }
 
+const recipients = readRecipients();
 const signal = await checkForSignal();
 if (!signal.matched) {
   console.log(signal.message ?? "No new reset signal.");
   process.exit(0);
 }
 
-const token = await getTenantToken();
-const recordId = await createBaseRecord(token, signal);
-await acknowledgeSignal(signal);
+const deliveredRecipientKeys = new Set(signal.deliveredRecipientKeys ?? []);
+const pendingRecipients = recipients.filter(
+  (recipient) => !deliveredRecipientKeys.has(recipient.key),
+);
+
+if (pendingRecipients.length > 0) {
+  const token = await getTenantToken();
+  for (const recipient of pendingRecipients) {
+    const messageId = await sendFeishuMessage(token, signal, recipient);
+    await recordDelivery(signal, recipient, messageId);
+    deliveredRecipientKeys.add(recipient.key);
+  }
+}
+
+const recipientKeys = recipients.map((recipient) => recipient.key);
+await acknowledgeSignal(signal, recipientKeys);
 console.log(
-  `Delivered ${signal.sourceAccount ?? "@thsottiaux"} tweet ` +
-    `${signal.tweetId} to Base record ${recordId}.`,
+  `Delivered ${signal.sourceAccount} signal ${signal.tweetId} directly to ` +
+    `${recipientKeys.length} Feishu recipient(s).`,
 );

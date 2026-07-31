@@ -21,8 +21,7 @@ jobs:
       MONITOR_KEY: ${{ secrets.MONITOR_KEY }}
       FEISHU_APP_ID: cli_aaad5f72d7f95cb3
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-      FEISHU_BASE_TOKEN: KtOObesrpatdCwspUGnc0Lhyn55
-      FEISHU_TABLE_ID: tblZczmgME2pOtum
+      FEISHU_RECIPIENTS_JSON: ${{ secrets.FEISHU_RECIPIENTS_JSON }}
 
     steps:
       - uses: actions/checkout@v4
