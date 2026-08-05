@@ -155,7 +155,7 @@ function messageContent(signal) {
             `观察窗口：未来 48 小时\n` +
             `支持讨论：${Number(signal.supportingPosts)} 条 / ${Number(signal.supportingSources)} 个渠道\n` +
             `相反观点：${Number(signal.contradictingPosts)} 条\n` +
-            `AI 复核：${Number(signal.aiReviewApproved)} 条通过、${Number(signal.aiReviewPending)} 条待审、${Number(signal.aiReviewRejected)} 条排除\n` +
+            `Codex 自主调查：${Number(signal.aiScoutFindings)} 条证据（支持 ${Number(signal.aiScoutPredictive)} / 反对 ${Number(signal.aiScoutContradicting)}）\n` +
             `生成时间：${formatPublishedAt(signal.publishedAt)}（北京时间）`,
         },
       ],
