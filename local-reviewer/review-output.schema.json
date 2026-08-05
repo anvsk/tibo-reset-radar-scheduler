@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "verdict": {
+            "type": "string",
+            "enum": ["predictive", "contradicting", "irrelevant"]
+          },
+          "reasonKey": {
+            "type": "string",
+            "enum": [
+              "upcoming_reset_rumor",
+              "reported_reset",
+              "banked_reset",
+              "extra_reset",
+              "no_reset_or_delay",
+              "irrelevant"
+            ]
+          },
+          "confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "summaryZh": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "reasonKey",
+          "confidence",
+          "summaryZh",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["results"],
+  "additionalProperties": false
+}
