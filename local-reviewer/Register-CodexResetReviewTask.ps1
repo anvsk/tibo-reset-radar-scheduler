@@ -14,9 +14,7 @@ if (-not (Test-Path -LiteralPath $reviewerScript)) {
 $pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
 $escapedScript = $reviewerScript.Replace('"', '""')
 $action = New-ScheduledTaskAction -Execute $pwshPath -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$escapedScript`""
-$trigger = New-ScheduledTaskTrigger -Daily -At '00:00'
-$trigger.Repetition.Interval = 'PT15M'
-$trigger.Repetition.Duration = 'P1D'
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 15)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
 
