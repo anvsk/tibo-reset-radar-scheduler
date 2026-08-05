@@ -18,6 +18,41 @@ $hasMutex = $false
 $temporaryDirectory = $null
 $reviewKeyPointer = [IntPtr]::Zero
 
+function Initialize-ReviewerProxy {
+    if ($env:HTTPS_PROXY -or $env:HTTP_PROXY) {
+        return
+    }
+
+    $internetSettings = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -Name ProxyEnable, ProxyServer -ErrorAction SilentlyContinue
+    if (-not $internetSettings -or $internetSettings.ProxyEnable -ne 1 -or -not $internetSettings.ProxyServer) {
+        return
+    }
+
+    $proxyServer = [string]$internetSettings.ProxyServer
+    if ($proxyServer.Contains(';')) {
+        $entries = @{}
+        foreach ($entry in $proxyServer.Split(';', [StringSplitOptions]::RemoveEmptyEntries)) {
+            $parts = $entry.Split('=', 2)
+            if ($parts.Count -eq 2) {
+                $entries[$parts[0].Trim().ToLowerInvariant()] = $parts[1].Trim()
+            }
+        }
+        $proxyServer = $entries['https'] ?? $entries['http']
+    }
+    if (-not $proxyServer) {
+        return
+    }
+    if ($proxyServer -notmatch '^https?://') {
+        $proxyServer = 'http://' + $proxyServer
+    }
+
+    $proxyUri = $null
+    if ([Uri]::TryCreate($proxyServer, [UriKind]::Absolute, [ref]$proxyUri)) {
+        $env:HTTP_PROXY = $proxyUri.AbsoluteUri.TrimEnd('/')
+        $env:HTTPS_PROXY = $proxyUri.AbsoluteUri.TrimEnd('/')
+    }
+}
+
 function Write-ReviewerLog {
     param([string]$Message)
     New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -26,6 +61,7 @@ function Write-ReviewerLog {
 }
 
 try {
+    Initialize-ReviewerProxy
     $hasMutex = $mutex.WaitOne(0)
     if (-not $hasMutex) {
         Write-ReviewerLog '已有复核进程运行，本轮跳过。'
