@@ -144,6 +144,56 @@ function safePostUrl(value) {
 }
 
 function messageContent(signal) {
+  if (signal.alertKind === "community_prediction") {
+    const predictionRate = Number.isFinite(Number(signal.predictionProbability))
+      ? `${Number(signal.predictionProbability)}%`
+      : signal.confidence;
+    const threshold = Number.isFinite(Number(signal.predictionThreshold))
+      ? `${Number(signal.predictionThreshold)}%`
+      : "90%";
+    const detailUrl = safePostUrl(signal.dashboardUrl ?? signal.postUrl);
+    const content = [
+      [
+        {
+          tag: "text",
+          text:
+            "⚠️ 这是社区讨论预测，尚未获得 OpenAI 或 Codex 团队确认。\n" +
+            `预测率：${predictionRate}\n` +
+            `触发阈值：${threshold}\n` +
+            `观察窗口：最近 48 小时\n` +
+            `触发时间：${formatPublishedAt(signal.publishedAt)}（北京时间）`,
+        },
+      ],
+      [
+        {
+          tag: "text",
+          text: `\n社区证据摘要\n${signal.translationZh ?? signal.originalText}`,
+        },
+      ],
+      [
+        {
+          tag: "text",
+          text: `\n评分依据\n${signal.classificationReason}`,
+        },
+      ],
+    ];
+    if (detailUrl) {
+      content.push([
+        {
+          tag: "a",
+          text: "查看预测详情",
+          href: detailUrl,
+        },
+      ]);
+    }
+    return JSON.stringify({
+      zh_cn: {
+        title: "Codex 额度重置预测预警",
+        content,
+      },
+    });
+  }
+
   const translation =
     typeof signal.translationZh === "string" && signal.translationZh.trim()
       ? signal.translationZh.trim()
@@ -194,6 +244,34 @@ function messageContent(signal) {
       content,
     },
   });
+}
+
+function selectRecipients(signal, recipients) {
+  if (signal.targetRecipientNames === undefined) return recipients;
+  if (
+    !Array.isArray(signal.targetRecipientNames) ||
+    signal.targetRecipientNames.length === 0 ||
+    signal.targetRecipientNames.some(
+      (name) => typeof name !== "string" || name.trim().length === 0,
+    )
+  ) {
+    throw new Error("Signal targetRecipientNames must be a non-empty name array.");
+  }
+
+  const targetNames = new Set(
+    signal.targetRecipientNames.map((name) => name.trim()),
+  );
+  const selected = recipients.filter((recipient) =>
+    targetNames.has(recipient.name.trim()),
+  );
+  const selectedNames = new Set(selected.map((recipient) => recipient.name.trim()));
+  const missingNames = [...targetNames].filter((name) => !selectedNames.has(name));
+  if (missingNames.length > 0) {
+    throw new Error(
+      `Configured Feishu recipients are missing targets: ${missingNames.join(", ")}`,
+    );
+  }
+  return selected;
 }
 
 function idempotencyKey(signal, recipient) {
@@ -297,8 +375,9 @@ if (!signal.matched) {
   process.exit(0);
 }
 
+const selectedRecipients = selectRecipients(signal, recipients);
 const deliveredRecipientKeys = new Set(signal.deliveredRecipientKeys ?? []);
-const pendingRecipients = recipients.filter(
+const pendingRecipients = selectedRecipients.filter(
   (recipient) => !deliveredRecipientKeys.has(recipient.key),
 );
 
@@ -311,9 +390,9 @@ if (pendingRecipients.length > 0) {
   }
 }
 
-const recipientKeys = recipients.map((recipient) => recipient.key);
+const recipientKeys = selectedRecipients.map((recipient) => recipient.key);
 await acknowledgeSignal(signal, recipientKeys);
 console.log(
-  `Delivered ${signal.sourceAccount} signal ${signal.tweetId} directly to ` +
+  `Delivered ${signal.alertKind ?? "official_signal"} ${signal.tweetId} directly to ` +
     `${recipientKeys.length} Feishu recipient(s).`,
 );
