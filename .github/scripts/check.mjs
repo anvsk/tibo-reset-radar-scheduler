@@ -144,13 +144,52 @@ function safePostUrl(value) {
 }
 
 function messageContent(signal) {
+  if (signal.alertKind === "prediction_report") {
+    const detailUrl = safePostUrl(signal.dashboardUrl ?? signal.postUrl);
+    const content = [
+      [
+        {
+          tag: "text",
+          text:
+            `当前预测率：${Number(signal.predictionProbability)}%\n` +
+            `观察窗口：未来 48 小时\n` +
+            `支持讨论：${Number(signal.supportingPosts)} 条 / ${Number(signal.supportingSources)} 个渠道\n` +
+            `相反观点：${Number(signal.contradictingPosts)} 条\n` +
+            `AI 复核：${Number(signal.aiReviewApproved)} 条通过、${Number(signal.aiReviewPending)} 条待审、${Number(signal.aiReviewRejected)} 条排除\n` +
+            `生成时间：${formatPublishedAt(signal.publishedAt)}（北京时间）`,
+        },
+      ],
+      [
+        {
+          tag: "text",
+          text: `\n原因分析\n${signal.translationZh}`,
+        },
+      ],
+      [
+        {
+          tag: "text",
+          text: `\n口径说明\n${signal.classificationReason}\n该预测未获 OpenAI 或 Codex 团队确认。`,
+        },
+      ],
+    ];
+    if (detailUrl) {
+      content.push([{ tag: "a", text: "查看预测详情", href: detailUrl }]);
+    }
+    return JSON.stringify({
+      zh_cn: {
+        title: "Codex 额度重置预测报告",
+        content,
+      },
+    });
+  }
+
   if (signal.alertKind === "community_prediction") {
     const predictionRate = Number.isFinite(Number(signal.predictionProbability))
       ? `${Number(signal.predictionProbability)}%`
       : signal.confidence;
     const threshold = Number.isFinite(Number(signal.predictionThreshold))
       ? `${Number(signal.predictionThreshold)}%`
-      : "90%";
+      : "80%";
     const detailUrl = safePostUrl(signal.dashboardUrl ?? signal.postUrl);
     const content = [
       [
@@ -385,13 +424,17 @@ if (pendingRecipients.length > 0) {
   const token = await getTenantToken();
   for (const recipient of pendingRecipients) {
     const messageId = await sendFeishuMessage(token, signal, recipient);
-    await recordDelivery(signal, recipient, messageId);
+    if (signal.deliveryMode !== "stateless") {
+      await recordDelivery(signal, recipient, messageId);
+    }
     deliveredRecipientKeys.add(recipient.key);
   }
 }
 
 const recipientKeys = selectedRecipients.map((recipient) => recipient.key);
-await acknowledgeSignal(signal, recipientKeys);
+if (signal.deliveryMode !== "stateless") {
+  await acknowledgeSignal(signal, recipientKeys);
+}
 console.log(
   `Delivered ${signal.alertKind ?? "official_signal"} ${signal.tweetId} directly to ` +
     `${recipientKeys.length} Feishu recipient(s).`,

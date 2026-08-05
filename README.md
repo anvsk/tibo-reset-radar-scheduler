@@ -1,6 +1,8 @@
 # Codex Reset Radar Scheduler
 
-每 15 分钟调用一次 Codex Reset Radar。站点同时监控 Tibo、OpenAI、OpenAI Developers、两位 Codex 团队成员及多个社区渠道。只有返回新的一手额度重置信号时，才把来源、可信度、中文翻译、判定依据和原文直接发送给配置的飞书用户。
+每 15 分钟调用一次 Codex Reset Radar。站点同时监控 Tibo、OpenAI、OpenAI Developers、两位 Codex 团队成员及多个社区渠道。一手额度重置信号发送给全部配置接收人，社区预测越过 80% / 95% 时仅提醒邓平安；每天北京时间 10:00 和 17:00 还会固定向邓平安发送预测率与原因报告。
+
+社区候选由 [`local-reviewer`](./local-reviewer) 在当前 Windows 用户下调用已登录的 Codex CLI 做语义复核。未复核、低于 80% 语义置信度或只描述常规/过去重置的帖子，不展示、不计分、不推送。
 
 ## 安全边界
 
