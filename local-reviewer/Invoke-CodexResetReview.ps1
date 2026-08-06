@@ -100,13 +100,14 @@ try {
 
 严格规则：
 1. 每个渠道都必须调查。coverage 必须原样返回全部 sourceAccount，各一次；能检索为 searched，访问或检索失败为 unavailable，并用 note 简述实际情况。
-2. findings 只收录发布时间不早于最早时间、原帖直链可核验、语义分类把握不低于 80% 的内容。找不到时 findings 返回空数组，绝不凑数。
+2. findings 只收录原站实际发布时间不早于最早时间、原帖直链可核验、语义分类把握不低于 80% 的内容。找不到时 findings 返回空数组，绝不凑数。
 3. predictive：作者明确断言未来 48 小时会有额外/集中重置，或明确说明一次非常规重置仍在滚动、未来 48 小时会继续覆盖。contradicting：作者明确说不会重置、计划取消或延期。
 4. 以下全部排除：普通周/月度自动重置；询问自己的重置日期；升级套餐是否重置；额度消耗/价格/rate limit/故障；工具介绍；历史重置；只说自己已经恢复但没有未来继续覆盖含义；疑问句、条件假设、玩笑、含糊猜测；转述却找不到原始出处。
 5. reported_reset 仅用于“非常规集中重置正在滚动且未来仍会继续覆盖”。banked_reset、extra_reset、upcoming_reset_rumor 分别用于预存重置、赠送额外重置、未来重置传闻；反对证据只能用 no_reset_or_delay。
 6. confidence 是对语义判断及原帖核验的把握，不是重置事件的最终概率。summaryZh 用中文提炼原帖事实，reason 用中文解释为何是未来预测证据或反证。
-7. URL 必须是对应渠道的 canonical 原帖直链，不能是搜索结果页、聚合页、媒体转载或缓存。publishedAt 必须来自可核验时间；无法核验就不收录。
-8. summaryZh 总结本轮覆盖、找到的支持/反对证据数量及主要结论，不得声称已核验实际未打开的页面。
+7. URL 必须是对应渠道的 canonical 原帖直链，不能是搜索结果页、聚合页、媒体转载或缓存。publishedAt 必须抄录原帖页面或原站 API 的绝对发布时间；禁止使用当前时间、搜索结果抓取时间、截图中的相对时间推算或凭语义猜时间，无法核验就不收录。
+8. 每条 finding 必须给 predictionExpiresAt：该说法最迟何时仍可算作“未来事件”的 ISO 8601 时间。必须晚于调查时间且不超过调查时间后 48 小时；“明天”等相对措辞要按原帖发布时间和作者时区保守换算。若所指日期在调查时已经过去，必须排除该 finding。
+9. 每轮报告是当前证据的完整快照，不要沿用上轮结论。summaryZh 总结本轮覆盖、找到的支持/反对证据数量及主要结论，不得声称已核验实际未打开的页面。
 
 渠道 JSON：
 $channelsJson
@@ -156,7 +157,7 @@ $channelsJson
     $scoutUri = '{0}/api/ai-scout' -f $config.siteUrl.TrimEnd('/')
     $response = Invoke-RestMethod -Method Post -Uri $scoutUri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 90
     if (-not $response.ok) { throw '站点拒绝 Codex 自主调查结果。' }
-    Write-ReviewerLog ("自主调查完成：9 个渠道，{0} 条证据（支持 {1} / 反对 {2}），预测率 {3}%。" -f $response.findings, $response.predictive, $response.contradicting, $response.prediction.probability)
+    Write-ReviewerLog ("自主调查完成：9 个渠道，提交 {0} 条，原站核验通过 {1} 条、拒绝 {2} 条（支持 {3} / 反对 {4}），预测率 {5}%。" -f $response.submittedFindings, $response.findings, $response.rejected, $response.predictive, $response.contradicting, $response.prediction.probability)
 }
 catch {
     Write-ReviewerLog ('自主调查失败：' + $_.Exception.Message)
