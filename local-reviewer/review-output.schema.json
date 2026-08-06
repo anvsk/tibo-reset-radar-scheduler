@@ -27,6 +27,7 @@
           "sourceAccount": { "type": "string" },
           "url": { "type": "string" },
           "publishedAt": { "type": "string" },
+          "predictionExpiresAt": { "type": "string" },
           "author": { "type": "string" },
           "verdict": {
             "type": "string",
@@ -54,6 +55,7 @@
           "sourceAccount",
           "url",
           "publishedAt",
+          "predictionExpiresAt",
           "author",
           "verdict",
           "reasonKey",
