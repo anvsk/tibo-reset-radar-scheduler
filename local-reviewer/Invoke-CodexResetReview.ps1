@@ -155,7 +155,13 @@ $channelsJson
         promptVersion = $PromptVersion
     } | ConvertTo-Json -Depth 10 -Compress
     $scoutUri = '{0}/api/ai-scout' -f $config.siteUrl.TrimEnd('/')
-    $response = Invoke-RestMethod -Method Post -Uri $scoutUri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 90
+    try {
+        $response = Invoke-RestMethod -Method Post -Uri $scoutUri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 90
+    }
+    catch {
+        $details = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        throw "站点拒绝 Codex 自主调查结果：$details"
+    }
     if (-not $response.ok) { throw '站点拒绝 Codex 自主调查结果。' }
     Write-ReviewerLog ("自主调查完成：9 个渠道，提交 {0} 条，原站核验通过 {1} 条、拒绝 {2} 条（支持 {3} / 反对 {4}），预测率 {5}%。" -f $response.submittedFindings, $response.findings, $response.rejected, $response.predictive, $response.contradicting, $response.prediction.probability)
 }
