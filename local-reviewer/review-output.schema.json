@@ -1,72 +1,38 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
+  "required": ["results"],
   "properties": {
-    "summaryZh": { "type": "string" },
-    "coverage": {
+    "results": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
       "items": {
         "type": "object",
-        "properties": {
-          "sourceAccount": { "type": "string" },
-          "status": {
-            "type": "string",
-            "enum": ["searched", "unavailable"]
-          },
-          "note": { "type": "string" }
-        },
-        "required": ["sourceAccount", "status", "note"],
-        "additionalProperties": false
-      }
-    },
-    "findings": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "sourceAccount": { "type": "string" },
-          "url": { "type": "string" },
-          "publishedAt": { "type": "string" },
-          "predictionExpiresAt": { "type": "string" },
-          "author": { "type": "string" },
-          "verdict": {
-            "type": "string",
-            "enum": ["predictive", "contradicting"]
-          },
-          "reasonKey": {
-            "type": "string",
-            "enum": [
-              "upcoming_reset_rumor",
-              "reported_reset",
-              "banked_reset",
-              "extra_reset",
-              "no_reset_or_delay"
-            ]
-          },
-          "confidence": {
-            "type": "integer",
-            "minimum": 80,
-            "maximum": 100
-          },
-          "summaryZh": { "type": "string" },
-          "reason": { "type": "string" }
-        },
+        "additionalProperties": false,
         "required": [
-          "sourceAccount",
-          "url",
-          "publishedAt",
-          "predictionExpiresAt",
-          "author",
+          "id",
           "verdict",
           "reasonKey",
           "confidence",
           "summaryZh",
           "reason"
         ],
-        "additionalProperties": false
+        "properties": {
+          "id": { "type": "string" },
+          "verdict": {
+            "type": "string",
+            "enum": ["confirmed", "strong_hint", "negative", "irrelevant"]
+          },
+          "reasonKey": {
+            "type": "string",
+            "enum": ["direct_reset", "banked_reset", "reset_plan", "no_reset", "irrelevant"]
+          },
+          "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "summaryZh": { "type": "string" },
+          "reason": { "type": "string" }
+        }
       }
     }
-  },
-  "required": ["summaryZh", "coverage", "findings"],
-  "additionalProperties": false
+  }
 }
