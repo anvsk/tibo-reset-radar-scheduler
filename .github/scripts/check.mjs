@@ -237,6 +237,10 @@ function messageContent(signal) {
     typeof signal.translationZh === "string" && signal.translationZh.trim()
       ? signal.translationZh.trim()
       : "中文翻译暂不可用，请结合原文和判定依据查看。";
+  const reviewModeLabel =
+    signal.reviewMode === "keyword_fallback"
+      ? "关键词兜底（本机恢复后继续由 AI 复核）"
+      : "Codex AI";
   const postUrl = safePostUrl(signal.postUrl);
   const content = [
     [
@@ -246,6 +250,7 @@ function messageContent(signal) {
           `来源：${signal.sourceName}（${signal.sourceAccount}）\n` +
           `类别：${signal.category}\n` +
           `可信度：${signal.confidence}\n` +
+          `判定方式：${reviewModeLabel}\n` +
           `发布时间：${formatPublishedAt(signal.publishedAt)}（北京时间）`,
       },
     ],
@@ -279,7 +284,10 @@ function messageContent(signal) {
   }
   return JSON.stringify({
     zh_cn: {
-      title: "Codex 额度重置监控",
+      title:
+        signal.reviewMode === "keyword_fallback"
+          ? "Codex 额度重置监控（关键词兜底）"
+          : "Codex 额度重置监控",
       content,
     },
   });
@@ -408,34 +416,45 @@ async function acknowledgeSignal(signal, recipientKeys) {
 }
 
 const recipients = readRecipients();
-const signal = await checkForSignal();
-if (!signal.matched) {
-  console.log(signal.message ?? "No new reset signal.");
-  process.exit(0);
-}
+let deliveredSignals = 0;
 
-const selectedRecipients = selectRecipients(signal, recipients);
-const deliveredRecipientKeys = new Set(signal.deliveredRecipientKeys ?? []);
-const pendingRecipients = selectedRecipients.filter(
-  (recipient) => !deliveredRecipientKeys.has(recipient.key),
-);
-
-if (pendingRecipients.length > 0) {
-  const token = await getTenantToken();
-  for (const recipient of pendingRecipients) {
-    const messageId = await sendFeishuMessage(token, signal, recipient);
-    if (signal.deliveryMode !== "stateless") {
-      await recordDelivery(signal, recipient, messageId);
-    }
-    deliveredRecipientKeys.add(recipient.key);
+for (let index = 0; index < 20; index += 1) {
+  const signal = await checkForSignal();
+  if (!signal.matched) {
+    console.log(
+      deliveredSignals > 0
+        ? `Delivered ${deliveredSignals} signal(s); queue is empty.`
+        : signal.message ?? "No new reset signal.",
+    );
+    process.exit(0);
   }
+
+  const selectedRecipients = selectRecipients(signal, recipients);
+  const deliveredRecipientKeys = new Set(signal.deliveredRecipientKeys ?? []);
+  const pendingRecipients = selectedRecipients.filter(
+    (recipient) => !deliveredRecipientKeys.has(recipient.key),
+  );
+
+  if (pendingRecipients.length > 0) {
+    const token = await getTenantToken();
+    for (const recipient of pendingRecipients) {
+      const messageId = await sendFeishuMessage(token, signal, recipient);
+      if (signal.deliveryMode !== "stateless") {
+        await recordDelivery(signal, recipient, messageId);
+      }
+      deliveredRecipientKeys.add(recipient.key);
+    }
+  }
+
+  const recipientKeys = selectedRecipients.map((recipient) => recipient.key);
+  if (signal.deliveryMode !== "stateless") {
+    await acknowledgeSignal(signal, recipientKeys);
+  }
+  deliveredSignals += 1;
+  console.log(
+    `Delivered ${signal.alertKind ?? "official_signal"} ${signal.tweetId} directly to ` +
+      `${recipientKeys.length} Feishu recipient(s) via ${signal.reviewMode ?? "ai"}.`,
+  );
 }
 
-const recipientKeys = selectedRecipients.map((recipient) => recipient.key);
-if (signal.deliveryMode !== "stateless") {
-  await acknowledgeSignal(signal, recipientKeys);
-}
-console.log(
-  `Delivered ${signal.alertKind ?? "official_signal"} ${signal.tweetId} directly to ` +
-    `${recipientKeys.length} Feishu recipient(s).`,
-);
+throw new Error("Signal queue exceeded the per-run delivery limit.");
