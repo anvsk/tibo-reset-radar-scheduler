@@ -2,7 +2,9 @@ name: Check Codex reset signals
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Offset from the top of the hour because GitHub documents higher schedule
+    # latency around minute 0. The local five-minute task is the primary path.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 permissions:

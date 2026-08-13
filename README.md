@@ -1,6 +1,6 @@
 # Tibo Reset Watch Scheduler
 
-调度器每 15 分钟抓取一次 Tibo 的公开动态，并把已经通过本机 Codex AI 语义复核的额度重置信号发送给全部配置的飞书接收人。
+本机调度器每 5 分钟串行抓取一次 Tibo 的公开动态、调用 Codex AI 做语义复核，并在命中时立即触发飞书送达。GitHub Actions 保留错开整点的 15 分钟兜底计划，避免其高峰期调度延迟影响主链路。
 
 [`local-reviewer`](./local-reviewer) 会逐条判断 Tibo 最近 48 小时的帖子、引用帖和回复。它会打开原帖核验上下文，识别明确重置、banked reset、未来计划、强烈暗示和明确不会重置；不再运行社区搜索或生成预测率。
 
