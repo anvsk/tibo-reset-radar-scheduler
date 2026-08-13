@@ -49,6 +49,36 @@ function Write-ReviewerLog {
     Add-Content -LiteralPath (Join-Path $logDirectory 'reviewer.log') -Value $line -Encoding utf8
 }
 
+function Invoke-FeishuDeliveryWorkflow {
+    $ghCommand = Get-Command gh.exe -ErrorAction Stop
+    $runArguments = @(
+        'workflow', 'run', 'Check Codex reset signals',
+        '-R', 'anvsk/tibo-reset-radar-scheduler'
+    )
+    $runOutput = @(& $ghCommand.Source @runArguments 2>&1)
+    $runExit = $LASTEXITCODE
+    if ($runExit -ne 0) {
+        throw "无法触发飞书投递流程：$($runOutput -join ' ')"
+    }
+
+    $runUrl = ($runOutput | ForEach-Object { [string]$_ } | Where-Object { $_ -match '/actions/runs/\d+' } | Select-Object -First 1)
+    if (-not $runUrl -or $runUrl -notmatch '/actions/runs/(?<runId>\d+)') {
+        throw '飞书投递流程已触发，但无法取得运行 ID。'
+    }
+    $runId = $Matches.runId
+
+    $watchArguments = @(
+        'run', 'watch', $runId,
+        '-R', 'anvsk/tibo-reset-radar-scheduler',
+        '--exit-status', '--interval', '3'
+    )
+    & $ghCommand.Source @watchArguments | Out-Null
+    $watchExit = $LASTEXITCODE
+    if ($watchExit -ne 0) {
+        throw "飞书投递流程失败，GitHub Actions run ID：$runId"
+    }
+}
+
 try {
     Initialize-ReviewerProxy
     $hasMutex = $mutex.WaitOne(0)
@@ -66,12 +96,23 @@ try {
     $reviewKeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureReviewKey)
     $reviewKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($reviewKeyPointer)
     $headers = @{ 'x-ai-review-key' = $reviewKey }
+    $scanUri = '{0}/api/check' -f $config.siteUrl.TrimEnd('/')
+    $scan = Invoke-RestMethod -Method Post -Uri $scanUri -Headers $headers -TimeoutSec 90
+    if (-not $scan.ok) { throw '站点未能完成 Tibo 动态抓取。' }
+    $deliveryRequired = [bool]$scan.matched
+
     $queueUri = '{0}/api/ai-review/queue?limit=20&promptVersion={1}' -f $config.siteUrl.TrimEnd('/'), [Uri]::EscapeDataString($PromptVersion)
     $queue = Invoke-RestMethod -Method Get -Uri $queueUri -Headers $headers -TimeoutSec 90
     if (-not $queue.ok) { throw '站点未返回可用的 Tibo AI 复核队列。' }
     $items = @($queue.items)
     if ($items.Count -eq 0) {
-        Write-ReviewerLog '本轮没有待 AI 判断的 Tibo 动态。'
+        if ($deliveryRequired) {
+            Invoke-FeishuDeliveryWorkflow
+            Write-ReviewerLog '发现待投递重置信号，飞书投递已完成。'
+        }
+        else {
+            Write-ReviewerLog '本轮已抓取，没有待 AI 判断的 Tibo 动态。'
+        }
         exit 0
     }
 
@@ -169,6 +210,9 @@ $itemsJson
         throw "站点拒绝 Tibo AI 复核结果：$details"
     }
     if (-not $response.ok) { throw '站点拒绝 Tibo AI 复核结果。' }
+    if ($deliveryRequired -or [int]$response.approved -gt 0) {
+        Invoke-FeishuDeliveryWorkflow
+    }
     Write-ReviewerLog ("Tibo AI 复核完成：提交 {0} 条，重置信号 {1} 条，无关 {2} 条。" -f $response.reviewed, $response.approved, $response.rejected)
 }
 catch {

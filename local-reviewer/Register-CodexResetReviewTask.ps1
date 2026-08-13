@@ -14,9 +14,9 @@ if (-not (Test-Path -LiteralPath $reviewerScript)) {
 $pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
 $escapedScript = $reviewerScript.Replace('"', '""')
 $action = New-ScheduledTaskAction -Execute $pwshPath -Argument "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$escapedScript`""
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 15)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 14)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 4)
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-Write-Host "已注册 Windows 定时任务：$TaskName（每 15 分钟）"
+Write-Host "已注册 Windows 定时任务：$TaskName（每 5 分钟，抓取、AI 判断和命中投递串行执行）"
