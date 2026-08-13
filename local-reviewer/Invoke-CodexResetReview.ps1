@@ -2,7 +2,8 @@
 param(
     [string]$Model = 'gpt-5.4-mini',
     [string]$PromptVersion = 'tibo-semantic-v1',
-    [string]$ConfigPath = (Join-Path $env:LOCALAPPDATA 'CodexResetRadar\reviewer-config.json')
+    [string]$ConfigPath = (Join-Path $env:LOCALAPPDATA 'CodexResetRadar\reviewer-config.json'),
+    [string]$DeliveryConfigPath = (Join-Path $env:LOCALAPPDATA 'CodexResetRadar\delivery-config.json')
 )
 
 Set-StrictMode -Version Latest
@@ -49,34 +50,180 @@ function Write-ReviewerLog {
     Add-Content -LiteralPath (Join-Path $logDirectory 'reviewer.log') -Value $line -Encoding utf8
 }
 
-function Invoke-FeishuDeliveryWorkflow {
-    $ghCommand = Get-Command gh.exe -ErrorAction Stop
-    $runArguments = @(
-        'workflow', 'run', 'Check Codex reset signals',
-        '-R', 'anvsk/tibo-reset-radar-scheduler'
-    )
-    $runOutput = @(& $ghCommand.Source @runArguments 2>&1)
-    $runExit = $LASTEXITCODE
-    if ($runExit -ne 0) {
-        throw "无法触发飞书投递流程：$($runOutput -join ' ')"
+function Get-DeliveryRecipients {
+    if (-not (Test-Path -LiteralPath $DeliveryConfigPath)) {
+        throw "缺少本机飞书接收人配置：$DeliveryConfigPath"
     }
 
-    $runUrl = ($runOutput | ForEach-Object { [string]$_ } | Where-Object { $_ -match '/actions/runs/\d+' } | Select-Object -First 1)
-    if (-not $runUrl -or $runUrl -notmatch '/actions/runs/(?<runId>\d+)') {
-        throw '飞书投递流程已触发，但无法取得运行 ID。'
-    }
-    $runId = $Matches.runId
+    $deliveryConfig = Get-Content -Raw -LiteralPath $DeliveryConfigPath | ConvertFrom-Json
+    $recipients = @($deliveryConfig.recipients)
+    if ($recipients.Count -eq 0) { throw '本机飞书接收人列表为空。' }
 
-    $watchArguments = @(
-        'run', 'watch', $runId,
-        '-R', 'anvsk/tibo-reset-radar-scheduler',
-        '--exit-status', '--interval', '3'
-    )
-    & $ghCommand.Source @watchArguments | Out-Null
-    $watchExit = $LASTEXITCODE
-    if ($watchExit -ne 0) {
-        throw "飞书投递流程失败，GitHub Actions run ID：$runId"
+    $keys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($recipient in $recipients) {
+        if (
+            -not $recipient.key -or
+            -not $recipient.name -or
+            [string]$recipient.openId -notmatch '^ou_[a-zA-Z0-9]+$' -or
+            -not $keys.Add([string]$recipient.key)
+        ) {
+            throw '本机飞书接收人配置无效或存在重复 key。'
+        }
     }
+    return $recipients
+}
+
+function New-FeishuPostContent {
+    param([Parameter(Mandatory)]$Signal)
+
+    $publishedAt = try {
+        $parsed = [DateTimeOffset]::Parse([string]$Signal.publishedAt)
+        [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($parsed.UtcDateTime, 'China Standard Time').ToString('yyyy-MM-dd HH:mm')
+    }
+    catch { '时间未知' }
+
+    $translation = if ([string]::IsNullOrWhiteSpace([string]$Signal.translationZh)) {
+        '中文翻译暂不可用，请结合原文和判定依据查看。'
+    }
+    else { ([string]$Signal.translationZh).Trim() }
+
+    $rows = [Collections.ArrayList]::new()
+    $summaryRow = [Collections.ArrayList]::new()
+    [void]$summaryRow.Add([ordered]@{
+        tag = 'text'
+        text = "来源：$($Signal.sourceName)（$($Signal.sourceAccount)）`n类别：$($Signal.category)`n可信度：$($Signal.confidence)`n发布时间：$publishedAt（北京时间）"
+    })
+    [void]$rows.Add($summaryRow)
+
+    $translationRow = [Collections.ArrayList]::new()
+    [void]$translationRow.Add([ordered]@{ tag = 'text'; text = "`n中文翻译`n$translation" })
+    [void]$rows.Add($translationRow)
+
+    $reasonRow = [Collections.ArrayList]::new()
+    [void]$reasonRow.Add([ordered]@{ tag = 'text'; text = "`n判定依据`n$($Signal.classificationReason)" })
+    [void]$rows.Add($reasonRow)
+
+    $originalRow = [Collections.ArrayList]::new()
+    [void]$originalRow.Add([ordered]@{ tag = 'text'; text = "`n原文`n$($Signal.originalText)" })
+    [void]$rows.Add($originalRow)
+
+    if ([Uri]::IsWellFormedUriString([string]$Signal.postUrl, [UriKind]::Absolute)) {
+        $linkRow = [Collections.ArrayList]::new()
+        [void]$linkRow.Add([ordered]@{ tag = 'a'; text = '查看原帖'; href = [string]$Signal.postUrl })
+        [void]$rows.Add($linkRow)
+    }
+
+    return [ordered]@{
+        zh_cn = [ordered]@{
+            title = 'Codex 额度重置监控'
+            content = $rows
+        }
+    } | ConvertTo-Json -Depth 10 -Compress
+}
+
+function Get-DeliveryIdempotencyKey {
+    param([string]$TweetId, [string]$RecipientKey)
+    $bytes = [Text.Encoding]::UTF8.GetBytes("${TweetId}:${RecipientKey}")
+    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    return 'codex-reset-' + $hash.Substring(0, 32)
+}
+
+function Invoke-SiteJsonPost {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][hashtable]$Headers,
+        [Parameter(Mandatory)]$Payload
+    )
+    $body = $Payload | ConvertTo-Json -Depth 8 -Compress
+    return Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 90
+}
+
+function Send-LocalFeishuSignal {
+    param(
+        [Parameter(Mandatory)]$Signal,
+        [Parameter(Mandatory)][array]$Recipients,
+        [Parameter(Mandatory)][hashtable]$Headers,
+        [Parameter(Mandatory)][string]$SiteUrl
+    )
+
+    $targetNamesProperty = $Signal.PSObject.Properties['targetRecipientNames']
+    $targets = if ($targetNamesProperty -and $null -ne $targetNamesProperty.Value) {
+        $targetNames = @($targetNamesProperty.Value | ForEach-Object { ([string]$_).Trim() })
+        @($Recipients | Where-Object { $targetNames -contains ([string]$_.name).Trim() })
+    }
+    else { @($Recipients) }
+    if ($targets.Count -eq 0) { throw '没有找到重置信号对应的本机飞书接收人。' }
+
+    $delivered = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $deliveredKeysProperty = $Signal.PSObject.Properties['deliveredRecipientKeys']
+    if ($deliveredKeysProperty) {
+        foreach ($key in @($deliveredKeysProperty.Value)) { [void]$delivered.Add([string]$key) }
+    }
+    $larkCommand = Get-Command lark-cli -ErrorAction Stop
+    $content = New-FeishuPostContent -Signal $Signal
+
+    $env:LARKSUITE_CLI_NO_UPDATE_NOTIFIER = '1'
+    $env:LARKSUITE_CLI_NO_SKILLS_NOTIFIER = '1'
+    try {
+        foreach ($recipient in $targets) {
+            if ($delivered.Contains([string]$recipient.key)) { continue }
+
+            $arguments = @(
+                'im', '+messages-send',
+                '--user-id', [string]$recipient.openId,
+                '--msg-type', 'post',
+                '--content', $content,
+                '--idempotency-key', (Get-DeliveryIdempotencyKey -TweetId ([string]$Signal.tweetId) -RecipientKey ([string]$recipient.key)),
+                '--as', 'bot'
+            )
+            $output = @(& $larkCommand.Source @arguments 2>&1)
+            $sendExit = $LASTEXITCODE
+            if ($sendExit -ne 0) {
+                throw "本机飞书消息发送失败（$($recipient.name)）：$($output -join ' ')"
+            }
+            $result = ($output -join "`n") | ConvertFrom-Json
+            $messageId = [string]$result.data.message_id
+            if (-not $result.ok -or -not $messageId) {
+                throw "本机飞书消息未返回成功回执（$($recipient.name)）。"
+            }
+
+            $receipt = Invoke-SiteJsonPost -Uri ($SiteUrl + '/api/delivery') -Headers $Headers -Payload ([ordered]@{
+                tweetId = [string]$Signal.tweetId
+                recipientKey = [string]$recipient.key
+                recipientName = [string]$recipient.name
+                messageId = $messageId
+            })
+            if (-not $receipt.ok) { throw "站点拒绝飞书投递回执（$($recipient.name)）。" }
+            [void]$delivered.Add([string]$recipient.key)
+        }
+    }
+    finally {
+        Remove-Item Env:LARKSUITE_CLI_NO_UPDATE_NOTIFIER -ErrorAction SilentlyContinue
+        Remove-Item Env:LARKSUITE_CLI_NO_SKILLS_NOTIFIER -ErrorAction SilentlyContinue
+    }
+
+    $recipientKeys = @($targets | ForEach-Object { [string]$_.key })
+    $ack = Invoke-SiteJsonPost -Uri ($SiteUrl + '/api/ack') -Headers $Headers -Payload ([ordered]@{
+        tweetId = [string]$Signal.tweetId
+        recipientKeys = $recipientKeys
+    })
+    if (-not $ack.ok) { throw '站点拒绝重置信号确认回执。' }
+}
+
+function Invoke-LocalScanAndDelivery {
+    param(
+        [Parameter(Mandatory)][string]$SiteUrl,
+        [Parameter(Mandatory)][hashtable]$Headers,
+        [Parameter(Mandatory)][array]$Recipients
+    )
+
+    for ($index = 0; $index -lt 20; $index += 1) {
+        $scan = Invoke-RestMethod -Method Post -Uri ($SiteUrl + '/api/check') -Headers $Headers -TimeoutSec 90
+        if (-not $scan.ok) { throw '站点未能完成 Tibo 动态抓取。' }
+        if (-not $scan.matched) { return $scan }
+        Send-LocalFeishuSignal -Signal $scan -Recipients $Recipients -Headers $Headers -SiteUrl $SiteUrl
+    }
+    throw '待投递重置信号超过单轮处理上限。'
 }
 
 try {
@@ -96,23 +243,16 @@ try {
     $reviewKeyPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureReviewKey)
     $reviewKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($reviewKeyPointer)
     $headers = @{ 'x-ai-review-key' = $reviewKey }
-    $scanUri = '{0}/api/check' -f $config.siteUrl.TrimEnd('/')
-    $scan = Invoke-RestMethod -Method Post -Uri $scanUri -Headers $headers -TimeoutSec 90
-    if (-not $scan.ok) { throw '站点未能完成 Tibo 动态抓取。' }
-    $deliveryRequired = [bool]$scan.matched
+    $siteUrl = $config.siteUrl.TrimEnd('/')
+    $recipients = @(Get-DeliveryRecipients)
+    $scan = Invoke-LocalScanAndDelivery -SiteUrl $siteUrl -Headers $headers -Recipients $recipients
 
-    $queueUri = '{0}/api/ai-review/queue?limit=20&promptVersion={1}' -f $config.siteUrl.TrimEnd('/'), [Uri]::EscapeDataString($PromptVersion)
+    $queueUri = '{0}/api/ai-review/queue?limit=20&promptVersion={1}' -f $siteUrl, [Uri]::EscapeDataString($PromptVersion)
     $queue = Invoke-RestMethod -Method Get -Uri $queueUri -Headers $headers -TimeoutSec 90
     if (-not $queue.ok) { throw '站点未返回可用的 Tibo AI 复核队列。' }
     $items = @($queue.items)
     if ($items.Count -eq 0) {
-        if ($deliveryRequired) {
-            Invoke-FeishuDeliveryWorkflow
-            Write-ReviewerLog '发现待投递重置信号，飞书投递已完成。'
-        }
-        else {
-            Write-ReviewerLog '本轮已抓取，没有待 AI 判断的 Tibo 动态。'
-        }
+        Write-ReviewerLog '本轮已抓取，没有待 AI 判断的 Tibo 动态。'
         exit 0
     }
 
@@ -201,7 +341,7 @@ $itemsJson
         }
     }
     $body = [ordered]@{ results = @($submittedResults) } | ConvertTo-Json -Depth 8 -Compress
-    $reviewUri = '{0}/api/ai-review' -f $config.siteUrl.TrimEnd('/')
+    $reviewUri = '{0}/api/ai-review' -f $siteUrl
     try {
         $response = Invoke-RestMethod -Method Post -Uri $reviewUri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 90
     }
@@ -210,8 +350,8 @@ $itemsJson
         throw "站点拒绝 Tibo AI 复核结果：$details"
     }
     if (-not $response.ok) { throw '站点拒绝 Tibo AI 复核结果。' }
-    if ($deliveryRequired -or [int]$response.approved -gt 0) {
-        Invoke-FeishuDeliveryWorkflow
+    if ([int]$response.approved -gt 0) {
+        [void](Invoke-LocalScanAndDelivery -SiteUrl $siteUrl -Headers $headers -Recipients $recipients)
     }
     Write-ReviewerLog ("Tibo AI 复核完成：提交 {0} 条，重置信号 {1} 条，无关 {2} 条。" -f $response.reviewed, $response.approved, $response.rejected)
 }
